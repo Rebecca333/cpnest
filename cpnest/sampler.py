@@ -242,7 +242,8 @@ class HMCSampler(object):
             # Pick a the first point from the ensemble to start with
             # Pop it out the stack to prevent cloning
 
-            param = self.evolution_points.popleft()
+            param = self.evolution_points[np.random.randint(self.poolsize)]
+            self.evolution_points.remove(param)
             
             if logLmin.value==np.inf:
                 break
