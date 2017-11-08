@@ -105,7 +105,7 @@ class EnsembleStretch(EnsembleProposal):
         x = uniform(-1,1)*log(scale)
         Z = exp(x)
         out = a + (old - a)*Z
-        # Jacobean
+        # Jacobian
         self.log_J = out.dimension * x
         return out
 
@@ -180,6 +180,5 @@ class DefaultProposalCycle(ProposalCycle):
     """
     def __init__(self,*args,**kwargs):
         proposals = [EnsembleWalk(), EnsembleStretch(), DifferentialEvolution(), EnsembleEigenVector()]
-        weights = [1.0,1.0,1.0,1.0]
+        weights = [0.05,0.05,0.05,1.0]
         super(DefaultProposalCycle,self).__init__(proposals,weights,*args,**kwargs)
-
