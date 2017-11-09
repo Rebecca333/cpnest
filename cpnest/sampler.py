@@ -185,6 +185,7 @@ class HMCSampler(object):
         self.acceptance=0.0
         self.initialised=False
         self.gradients = []
+        self.gradientsL = []
         self.step_size = 0.003
         self.steps = 10
         self.momenta_distribution = None
@@ -218,9 +219,10 @@ class HMCSampler(object):
                 v[k] = momenta[j]
                 self.momenta.append(v)
         self.estimate_gradient()
+        self.estimate_gradientL()
         self.initialised=True
 
-    def estimate_nmcmc(self, safety=5, tau=None):
+    def estimate_nmcmc(self, safety=1, tau=None):
         """
         Estimate autocorrelation length of chain using acceptance fraction
         ACL = (2/acc) - 1
@@ -278,6 +280,7 @@ class HMCSampler(object):
             if (self.counter%(self.poolsize/10))==0:
                 self.proposals.set_ensemble(self.positions)
                 self.estimate_gradient()
+                self.estimate_gradientL()
                 self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
 #                if self.acceptance > 0.5:   self.step_size+=1./float(self.Nmcmc)
 #                elif self.acceptance < 0.5: self.step_size-=1./float(self.Nmcmc)
@@ -322,7 +325,7 @@ class HMCSampler(object):
     def estimate_gradient(self):
         
         self.gradients = []
-        logProbs = np.array([-(p.logL+p.logP) for p in self.positions])
+        logProbs = np.array([-p.logP for p in self.positions])#p.logL+
        
         # loop over the parameters, spline interpolate and estimate the gradient
         
@@ -335,7 +338,24 @@ class HMCSampler(object):
 
     def gradient(self, inParam):
         return np.array([g(inParam[n]) for g,n in zip(self.gradients,self.positions[0].names)])
-    
+
+    def estimate_gradientL(self):
+        
+        self.gradientsL = []
+        logProbs = np.array([-p.logL for p in self.positions])#p.logL+
+       
+        # loop over the parameters, spline interpolate and estimate the gradient
+        
+        for key in self.positions[0].names:
+            x = np.array([self.positions[i][key] for i in range(len(self.positions))])
+            idx = np.argsort(x)
+            x = x[idx]
+            logProbs = logProbs[idx]
+            self.gradientsL.append(InterpolatedUnivariateSpline(x,logProbs,ext=0,check_finite=True).derivative())
+
+    def gradientL(self, inParam):
+        return np.array([g(inParam[n]) for g,n in zip(self.gradientsL,self.positions[0].names)])
+
     def kinetic_energy(self, momentum):
         """Kinetic energy of the current velocity (assuming a standard Gaussian)
             (x dot x) / 2
@@ -370,29 +390,46 @@ class HMCSampler(object):
         hamitonian : float
         """
 
-        return -(position.logP+position.logL) + self.kinetic_energy(momentum)
+        return -position.logP + self.kinetic_energy(momentum) #+position.logL
 
-    def leapfrog_step(self, position, momentum):
-
+    def constrained_leapfrog_step(self, position, momentum, logLmin):
+        """
+        https://arxiv.org/pdf/1005.0157.pdf
+        """
         # Start by updating the momentum a half-step
         g = self.gradient(position)
 
         for j,k in enumerate(self.positions[0].names):
             momentum[k] += - 0.5 * self.step_size * g[j]
 
-        # Initalize x to be the first step
-        for j,k in enumerate(self.positions[0].names):
-            position[k] += self.step_size * momentum[k]
-
         for i in xrange(self.steps):
-
-            # Update momentum
-            g = self.gradient(position)
-            for j,k in enumerate(self.positions[0].names):
-                momentum[k] += - 0.5 * self.step_size * g[j]
-            # Update x
+            
+            # do a step
             for j,k in enumerate(self.positions[0].names):
                 position[k] += self.step_size * momentum[k]
+            
+            # Update gradient
+            g = self.gradient(position)
+            
+            # compute the constraint
+            position.logL = self.user.log_likelihood(position)
+
+            # check on the constraint
+            if position.logL > logLmin:
+                # take a full momentum sttep
+                for j,k in enumerate(self.positions[0].names):
+                    momentum[k] += - self.step_size * g[j]
+            else:
+                # compute the normal to the constraint
+                gL = self.gradientL(position)
+                n = gL/np.abs(np.sum(gL))
+                # bounce on the constraint
+                for j,k in enumerate(self.positions[0].names):
+                    momentum[k] += - 2 * (momentum[k]*n[j]) * n[j]
+        
+        # Update the position
+        for j,k in enumerate(self.positions[0].names):
+            position[k] += self.step_size * momentum[k]
 
         # Do a final update of the momentum for a half step
         g = self.gradient(position)
@@ -412,21 +449,17 @@ class HMCSampler(object):
 
         while self.jumps < self.Nmcmc:
             
-            newparam, newmomentum = self.leapfrog_step(oldparam.copy(),momentum)
+            newparam, newmomentum = self.constrained_leapfrog_step(oldparam.copy(),momentum, logLmin)
             newparam.logP = self.user.log_prior(newparam)
-            newparam.logL = self.user.log_likelihood(newparam)
-            
             current_energy = self.hamiltonian(newparam, newmomentum)
 
             logp_accept = min(0.0, starting_energy - current_energy)
     
             if logp_accept > np.log(random()):
-                
-                if newparam.logL > logLmin:
-                    oldparam = newparam
-                    momentum = newmomentum
-                    starting_energy = current_energy
-                    accepted+=1
+                oldparam = newparam
+                momentum = newmomentum
+                starting_energy = current_energy
+                accepted+=1
             
             self.jumps+=1
             
