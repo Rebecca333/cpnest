@@ -282,6 +282,11 @@ class HMCSampler(object):
                 self.estimate_gradient()
                 self.estimate_gradientL()
                 self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
+                # update the momenta
+                for n in range(self.poolsize):
+                    momenta = np.atleast_1d(self.momenta_distribution.rvs())
+                    for j,k in enumerate(self.positions[0].names):
+                        self.momenta[n][k] = momenta[j]
 #                if self.acceptance > 0.5:   self.step_size+=1./float(self.Nmcmc)
 #                elif self.acceptance < 0.5: self.step_size-=1./float(self.Nmcmc)
 #                if self.step_size<0.001: self.step_size  = 0.001
@@ -416,7 +421,7 @@ class HMCSampler(object):
 
             # check on the constraint
             if position.logL > logLmin:
-                # take a full momentum sttep
+                # take a full momentum step
                 for j,k in enumerate(self.positions[0].names):
                     momentum[k] += - self.step_size * g[j]
             else:
@@ -438,7 +443,7 @@ class HMCSampler(object):
 
         return position, momentum
         
-    def hamiltonian_sampling(self,inParam,momentum,logLmin):
+    def hamiltonian_sampling(self, inParam, momentum, logLmin):
         """
         hamiltonian sampling loop to generate the new live point taking nmcmc steps
         """
@@ -449,7 +454,7 @@ class HMCSampler(object):
 
         while self.jumps < self.Nmcmc:
             
-            newparam, newmomentum = self.constrained_leapfrog_step(oldparam.copy(),momentum, logLmin)
+            newparam, newmomentum = self.constrained_leapfrog_step(oldparam.copy(), momentum, logLmin)
             newparam.logP = self.user.log_prior(newparam)
             current_energy = self.hamiltonian(newparam, newmomentum)
 

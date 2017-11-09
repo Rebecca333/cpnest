@@ -26,7 +26,7 @@ class GaussianTestCase(unittest.TestCase):
     """
     def setUp(self):
         self.model=GaussianModel()
-        self.work=cpnest.CPNest(self.model,verbose=2,Nlive=500,maxmcmc=200,Nthreads=8, balance_samplers=True)
+        self.work=cpnest.CPNest(self.model,verbose=2,Nlive=1000, Poolsize=1000,maxmcmc=200,Nthreads=8, balance_samplers=True)
         self.work.run()
 
     def test_evidence(self):
