@@ -6,7 +6,8 @@ from math import log
 from collections import deque
 from random import random,randrange
 from operator import attrgetter
-from scipy.interpolate import UnivariateSpline
+from scipy.interpolate import InterpolatedUnivariateSpline
+from scipy.stats import multivariate_normal
 
 from . import parameter
 from . import proposal
@@ -41,7 +42,7 @@ class Sampler(object):
         self.verbose=verbose
         self.acceptance=0.0
         self.initialised=False
-        
+    
     def reset(self):
         """
         Initialise the sampler
@@ -87,7 +88,8 @@ class Sampler(object):
         main loop that generates samples and puts them in the queue for the nested sampler object
         """
         if not self.initialised:
-          self.reset()
+            self.reset()
+
         # Prevent process from zombification if consumer thread exits
         queue.cancel_join_thread()
         self.seed = seed
@@ -177,33 +179,45 @@ class HMCSampler(object):
         self.Nmcmc_exact = float(maxmcmc)
         self.proposals = proposal.DefaultProposalCycle()
         self.poolsize = poolsize
-        self.evolution_points = deque(maxlen=self.poolsize + 1) # +1 for the point to evolve
+        self.positions = deque(maxlen=self.poolsize + 1) # +1 for the point to evolve
+        self.momenta = deque(maxlen=self.poolsize + 1) # +1 for the point to evolve
         self.verbose=verbose
         self.acceptance=0.0
         self.initialised=False
-        self.gradient = []
-        self.step_size = 0.1
-        self.steps = 20
+        self.gradients = []
+        self.step_size = 0.003
+        self.steps = 10
+        self.momenta_distribution = None
     
     def reset(self):
         """
         Initialise the sampler
         """
         for n in range(self.poolsize):
-          while True:
-            if self.verbose > 2: sys.stderr.write("process {0!s} --> generating pool of {1:d} points for evolution --> {2:.0f} % complete\r".format(os.getpid(), self.poolsize, 100.0*float(n+1)/float(self.poolsize)))
-            p = self.user.new_point()
-            p.logP = self.user.log_prior(p)
-            if np.isfinite(p.logP): break
-          p.logL=self.user.log_likelihood(p)
-          self.evolution_points.append(p)
+            while True:
+                if self.verbose > 2: sys.stderr.write("process {0!s} --> generating pool of {1:d} points for evolution --> {2:.0f} % complete\r".format(os.getpid(), self.poolsize, 100.0*float(n+1)/float(self.poolsize)))
+                p = self.user.new_point()
+                p.logP = self.user.log_prior(p)
+                if np.isfinite(p.logP): break
+            p.logL=self.user.log_likelihood(p)
+            self.positions.append(p)
+    
         if self.verbose > 2: sys.stderr.write("\n")
-        self.proposals.set_ensemble(self.evolution_points)
-        for _ in range(len(self.evolution_points)):
-          s = self.evolution_points.popleft()
-          s = self.metropolis_hastings(s,-np.inf)
-          self.evolution_points.append(s)
-        self.proposals.set_ensemble(self.evolution_points)
+        self.proposals.set_ensemble(self.positions)
+        for _ in range(len(self.positions)):
+            s = self.positions.popleft()
+            s = self.metropolis_hastings(s,-np.inf)
+            self.positions.append(s)
+
+        self.proposals.set_ensemble(self.positions)
+        self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
+        for n in range(self.poolsize):
+            momenta = np.atleast_1d(self.momenta_distribution.rvs())
+            v = self.user.new_point()
+            for j,k in enumerate(self.positions[0].names):
+                v[k] = momenta[j]
+                self.momenta.append(v)
+        self.estimate_gradient()
         self.initialised=True
 
     def estimate_nmcmc(self, safety=5, tau=None):
@@ -241,27 +255,35 @@ class HMCSampler(object):
             
             # Pick a the first point from the ensemble to start with
             # Pop it out the stack to prevent cloning
-
-            param = self.evolution_points[np.random.randint(self.poolsize)]
-            self.evolution_points.remove(param)
+            
+            pick = np.random.randint(self.poolsize)
+            position = self.positions[pick]
+            momentum = self.momenta[pick]
+            
+            self.positions.remove(position)
             
             if logLmin.value==np.inf:
                 break
             
-            outParam = self.hamiltonian_sampling(param,logLmin.value)
+            newposition = self.hamiltonian_sampling(position,momentum,logLmin.value)
            
             # Put sample back in the stack
-            self.evolution_points.append(outParam.copy())
+            self.positions.append(newposition.copy())
             # If we bailed out then flag point as unusable
             if self.acceptance==0.0:
-                outParam.logL=-np.inf
+                newposition.logL=-np.inf
             # Push the sample onto the queue
-            queue.put((self.acceptance,self.jumps,outParam))
+            queue.put((self.acceptance,self.jumps,newposition))
             # Update the ensemble every now and again
-            if (self.counter%(self.poolsize/10))==0 or self.acceptance == 0.0:
-                self.proposals.set_ensemble(self.evolution_points)
+            if (self.counter%(self.poolsize/10))==0:
+                self.proposals.set_ensemble(self.positions)
                 self.estimate_gradient()
-            
+                self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
+#                if self.acceptance > 0.5:   self.step_size+=1./float(self.Nmcmc)
+#                elif self.acceptance < 0.5: self.step_size-=1./float(self.Nmcmc)
+#                if self.step_size<0.001: self.step_size  = 0.001
+#                print "step size:", self.step_size,"acceptance:",self.acceptance
+
             self.counter += 1
 
         sys.stderr.write("Sampler process {0!s}, exiting\n".format(os.getpid()))
@@ -300,20 +322,21 @@ class HMCSampler(object):
     def estimate_gradient(self):
         
         self.gradients = []
-        logLs = [p.logL for p in self.evolution_points]
+        logProbs = np.array([-(p.logL+p.logP) for p in self.positions])
+       
         # loop over the parameters, spline interpolate and estimate the gradient
         
-        for key in self.evolution_points[0].names:
-            x = [self.evolution_points[i][key] for i in range(len(self.evolution_points))]
+        for key in self.positions[0].names:
+            x = np.array([self.positions[i][key] for i in range(len(self.positions))])
             idx = np.argsort(x)
             x = x[idx]
-            logLs = logL[idx]
-            self.gradients.append(UnivariateSpline(x,logLs,ext=0).derivative())
+            logProbs = logProbs[idx]
+            self.gradients.append(InterpolatedUnivariateSpline(x,logProbs,ext=0,check_finite=True).derivative())
 
     def gradient(self, inParam):
-        return np.array([g(x) for g,x in zip(self.gradients,self.evolution_points[0].names)])
+        return np.array([g(inParam[n]) for g,n in zip(self.gradients,self.positions[0].names)])
     
-    def kinetic_energy(self):
+    def kinetic_energy(self, momentum):
         """Kinetic energy of the current velocity (assuming a standard Gaussian)
             (x dot x) / 2
         Parameters
@@ -324,9 +347,12 @@ class HMCSampler(object):
         -------
         kinetic_energy : float
         """
-        return 0.5 * self.velocity * self.velocity
+        p = momentum.asnparray()
+        p = p.view(dtype=np.float64)[:-2]
 
-    def hamiltonian(self, inParam):
+        return 0.5 * np.dot(p,np.dot(self.proposals.inverse_mass_matrix,p))+self.proposals.logdeterminant
+
+    def hamiltonian(self, position, momentum):
         """Computes the Hamiltonian of the current position, velocity pair
         H = U(x) + K(v)
         U is the potential energy and is = -log_posterior(x)
@@ -343,52 +369,63 @@ class HMCSampler(object):
         -------
         hamitonian : float
         """
-        return -self.user.log_likelihood(newparam) + kinetic_energy()
 
-    def leapfrog_step(self, inParam):
+        return -(position.logP+position.logL) + self.kinetic_energy(momentum)
 
-        # Start by updating the velocity a half-step
-        self.velocity += - 0.5 * self.step_size * self.gradient(inParam)
+    def leapfrog_step(self, position, momentum):
+
+        # Start by updating the momentum a half-step
+        g = self.gradient(position)
+
+        for j,k in enumerate(self.positions[0].names):
+            momentum[k] += - 0.5 * self.step_size * g[j]
 
         # Initalize x to be the first step
-        p = inParam + self.step_size * self.velocity
+        for j,k in enumerate(self.positions[0].names):
+            position[k] += self.step_size * momentum[k]
 
         for i in xrange(self.steps):
 
-            # Update velocity
-            self.velocity += - self.step_size * self.gradient(p)
-
+            # Update momentum
+            g = self.gradient(position)
+            for j,k in enumerate(self.positions[0].names):
+                momentum[k] += - 0.5 * self.step_size * g[j]
             # Update x
-            p += self.step_size * self.velocity
+            for j,k in enumerate(self.positions[0].names):
+                position[k] += self.step_size * momentum[k]
 
-        # Do a final update of the velocity for a half step
-        self.velocity += - 0.5 * self.step_size * self.gradient(p)
+        # Do a final update of the momentum for a half step
+        g = self.gradient(position)
+        for j,k in enumerate(self.positions[0].names):
+            momentum[k] += - 0.5 * self.step_size * g[j]
+
+        return position, momentum
         
-        return p
-        
-    def hamiltonian_sampling(self,inParam,logLmin):
+    def hamiltonian_sampling(self,inParam,momentum,logLmin):
         """
-        metropolis-hastings loop to generate the new live point taking nmcmc steps
+        hamiltonian sampling loop to generate the new live point taking nmcmc steps
         """
         self.jumps = 0
         accepted = 0
         oldparam = inParam.copy()
-        orig = self.hamiltonian(oldparam)
-        
+        starting_energy = self.hamiltonian(oldparam, momentum)
+
         while self.jumps < self.Nmcmc:
             
-            newparam = self.leapfrog_step(oldparam.copy())
+            newparam, newmomentum = self.leapfrog_step(oldparam.copy(),momentum)
             newparam.logP = self.user.log_prior(newparam)
             newparam.logL = self.user.log_likelihood(newparam)
             
-            current = hamiltonian(newparam)
-            p_accept = min(1.0, np.exp(orig - current))
-    
-            if p_accept > np.random.uniform():
+            current_energy = self.hamiltonian(newparam, newmomentum)
 
+            logp_accept = min(0.0, starting_energy - current_energy)
+    
+            if logp_accept > np.log(random()):
+                
                 if newparam.logL > logLmin:
                     oldparam = newparam
-                    logp_old = newparam.logP
+                    momentum = newmomentum
+                    starting_energy = current_energy
                     accepted+=1
             
             self.jumps+=1

@@ -19,8 +19,6 @@ class GaussianModel(cpnest.model.Model):
 
     def log_likelihood(self,p):
         return self.distr.logpdf(p['x'])
-        #return -0.5*(p['x']**2) - 0.5*np.log(2.0*np.pi)
-
 
 class GaussianTestCase(unittest.TestCase):
     """
@@ -28,7 +26,7 @@ class GaussianTestCase(unittest.TestCase):
     """
     def setUp(self):
         self.model=GaussianModel()
-        self.work=cpnest.CPNest(self.model,verbose=2,Nlive=500,maxmcmc=200,balance_samplers=True)
+        self.work=cpnest.CPNest(self.model,verbose=2,Nlive=500,maxmcmc=200,Nthreads=1, balance_samplers=True)
         self.work.run()
 
     def test_evidence(self):

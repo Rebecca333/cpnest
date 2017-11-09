@@ -28,7 +28,7 @@ class CPNest(object):
         if Nthreads is None:
             Nthreads = mp.cpu_count()
         print('Running with {0} parallel threads'.format(Nthreads))
-        from .sampler import Sampler
+        from .sampler import Sampler, HMCSampler
         from .NestedSampling import NestedSampler
         self.user=usermodel
         self.verbose=verbose
@@ -37,7 +37,7 @@ class CPNest(object):
         else:
             self.seed=seed
         self.NS = NestedSampler(self.user,Nlive=Nlive,output=output,verbose=verbose,seed=self.seed,prior_sampling=False)
-        self.Evolver = Sampler(self.user,maxmcmc,verbose=verbose,poolsize=Poolsize)
+        self.Evolver = HMCSampler(self.user,maxmcmc,verbose=verbose,poolsize=Poolsize)
         self.NUMBER_OF_PRODUCER_PROCESSES = Nthreads
         self.NUMBER_OF_CONSUMER_PROCESSES = 1
 
