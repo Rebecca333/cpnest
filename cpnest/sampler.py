@@ -306,11 +306,6 @@ class HMCSampler(object):
             x = x[idx]
             logProbs = logProbs[idx]
             self.gradients[type].append(InterpolatedUnivariateSpline(x,logProbs,ext=0,check_finite=True).derivative())
-#            plt.figure()
-#            plt.plot(x,logProbs,'x', label = 'data points')
-#            plt.plot(x,self.gradients[type][j](x),'o', label = 'interpolation')
-#            plt.legend()
-#            plt.savefig('logp_grad_%s_%s.png'%(type,key))
 
     def gradient(self, inParam, gradients_list):
         return np.array([g(inParam[n]) for g,n in zip(gradients_list,self.positions[0].names)])
