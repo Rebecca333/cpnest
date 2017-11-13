@@ -169,7 +169,7 @@ class HMCSampler(object):
     default: False
     
     poolsize:
-    number of objects for the affine invariant sampling
+    number of objects for the gradients estimation
     default: 1000
     """
     def __init__(self,usermodel,maxmcmc,verbose=False,poolsize=1000):
@@ -205,13 +205,14 @@ class HMCSampler(object):
     
         if self.verbose > 2: sys.stderr.write("\n")
         self.proposals.set_ensemble(self.positions)
-        for _ in range(len(self.positions)):
+        for k in range(len(self.positions)):
             s = self.positions.popleft()
             s = self.metropolis_hastings(s,-np.inf)
             self.positions.append(s)
 
         self.proposals.set_ensemble(self.positions)
         self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
+
         for n in range(self.poolsize):
             momenta = np.atleast_1d(self.momenta_distribution.rvs())
             v = self.user.new_point()
@@ -220,6 +221,7 @@ class HMCSampler(object):
                 self.momenta.append(v)
         self.estimate_gradient()
         self.estimate_gradientL()
+        self.step_size/=float(len(self.positions[0].names))
         self.initialised=True
 
     def estimate_nmcmc(self, safety=1, tau=None):
@@ -246,7 +248,7 @@ class HMCSampler(object):
         main loop that generates samples and puts them in the queue for the nested sampler object
         """
         if not self.initialised:
-          self.reset()
+            self.reset()
         # Prevent process from zombification if consumer thread exits
         queue.cancel_join_thread()
         self.seed = seed
@@ -263,14 +265,17 @@ class HMCSampler(object):
             momentum = self.momenta[pick]
             
             self.positions.remove(position)
+            self.momenta.remove(momentum)
             
             if logLmin.value==np.inf:
                 break
             
-            newposition = self.hamiltonian_sampling(position,momentum,logLmin.value)
+            newposition, newmomentum = self.hamiltonian_sampling(position,momentum,logLmin.value)
            
             # Put sample back in the stack
             self.positions.append(newposition.copy())
+            self.momenta.append(newmomentum.copy())
+            
             # If we bailed out then flag point as unusable
             if self.acceptance==0.0:
                 newposition.logL=-np.inf
@@ -330,7 +335,7 @@ class HMCSampler(object):
     def estimate_gradient(self):
         
         self.gradients = []
-        logProbs = np.array([-p.logP for p in self.positions])#p.logL+
+        logProbs = np.array([-p.logP for p in self.positions])
        
         # loop over the parameters, spline interpolate and estimate the gradient
         
@@ -347,7 +352,7 @@ class HMCSampler(object):
     def estimate_gradientL(self):
         
         self.gradientsL = []
-        logProbs = np.array([-p.logL for p in self.positions])#p.logL+
+        logProbs = np.array([-p.logL for p in self.positions])
        
         # loop over the parameters, spline interpolate and estimate the gradient
         
@@ -472,4 +477,4 @@ class HMCSampler(object):
 
         self.acceptance = float(accepted)/float(self.jumps)
         self.estimate_nmcmc()
-        return oldparam
+        return oldparam, momentum
