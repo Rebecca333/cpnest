@@ -14,7 +14,7 @@ class GaussianModel(cpnest.model.Model):
     def __init__(self):
         self.distr = stats.norm(loc=0,scale=1.0)
     names=['x']
-    bounds=[[-100.,100.]]
+    bounds=[[-10.,10.]]
     analytic_log_Z=0.0 - np.log(bounds[0][1] - bounds[0][0])
 
     def log_likelihood(self,p):
@@ -26,7 +26,7 @@ class GaussianTestCase(unittest.TestCase):
     """
     def setUp(self):
         self.model=GaussianModel()
-        self.work=cpnest.CPNest(self.model, verbose=3, Nlive=1024, Poolsize=1024, maxmcmc=2048, Nthreads=8, balance_samplers=True)
+        self.work=cpnest.CPNest(self.model, verbose=3, Nlive=1000, Poolsize=100, maxmcmc=128, Nthreads=8, balance_samplers=True)
         self.work.run()
 
     def test_evidence(self):

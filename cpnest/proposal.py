@@ -164,15 +164,15 @@ class EnsembleEigenVector(EnsembleProposal):
             name=self.ensemble[0].names[0]
             self.eigen_values = np.atleast_1d(np.var([self.ensemble[j][name] for j in range(n)]))
             self.eigen_vectors = np.eye(1)
-            self.inverse_mass_matrix=np.eye(1)/self.eigen_values
-            self.mass_matrix=np.eye(1)*self.eigen_values
+            self.inverse_mass_matrix=np.eye(1)*self.eigen_values
+            self.mass_matrix=np.eye(1)/self.eigen_values
         else:	 
             for i,name in enumerate(self.ensemble[0].names):
                 for j in range(n): cov_array[i,j] = self.ensemble[j][name]
             covariance = np.cov(cov_array)
             self.eigen_values,self.eigen_vectors = np.linalg.eigh(covariance)
-            self.inverse_mass_matrix=np.linalg.inv(covariance)
-            self.mass_matrix=covariance
+            self.mass_matrix=np.linalg.inv(covariance)
+            self.inverse_mass_matrix=covariance
 
     def get_sample(self,old):
         """
