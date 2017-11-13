@@ -189,23 +189,26 @@ class NestedSampler(object):
         consumes a sample from the shared queues and updates the evidence
         """
         # Increment the state of the evidence integration
-        logLmin=self.get_worst_live_point()
+        logLmin = self.get_worst_live_point()
         self.state.increment(self.params[self.worst].logL)
         self.condition = logaddexp(self.state.logZ,self.logLmax - self.iteration/(float(self.Nlive))) - self.state.logZ
         self.output_sample(self.params[self.worst])
         self.iteration+=1
         
         # Replace the point we just consumed with the next acceptable one
+        loops = 0
         while(True):
-            self.acceptance,self.jumps,proposed = queues[self.queue_counter].get()
+            loops += 1
+            self.acceptance, self.jumps, proposed = queues[self.queue_counter].get()
             self.queue_counter = (self.queue_counter + 1) % len(queues)
             if proposed.logL>self.logLmin.value:
                 # replace worst point with new one
                 self.params[self.worst]=proposed
                 break
+
         if self.verbose:
-          print("{0:d}: n:{1:4d} acc:{2:.3f} H: {3:.2f} logL {4:.5f} --> {5:.5f} dZ: {6:.3f} logZ: {7:.3f} logLmax: {8:.2f}"\
-            .format(self.iteration, self.jumps, self.acceptance, self.state.info,\
+            print("{0:d}: n:{1:4d} acc:{2:.3f} sub_acc:{3:.3f} H: {4:.2f} logL {5:.5f} --> {6:.5f} dZ: {7:.3f} logZ: {8:.3f} logLmax: {9:.2f}"\
+            .format(self.iteration, self.jumps, self.acceptance/float(loops), self.acceptance, self.state.info,\
               logLmin, self.params[self.worst].logL, self.condition, self.state.logZ, self.logLmax))
 
     def get_worst_live_point(self):

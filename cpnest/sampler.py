@@ -173,7 +173,7 @@ class HMCSampler(object):
     number of objects for the gradients estimation
     default: 1000
     """
-    def __init__(self,usermodel,maxmcmc,verbose=False,poolsize=1000):
+    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000):
         self.user           = usermodel
         self.maxmcmc        = maxmcmc
         self.Nmcmc          = maxmcmc
@@ -220,10 +220,10 @@ class HMCSampler(object):
         if self.verbose > 2: sys.stderr.write("Computing initial gradients ...")
         logProbs = np.array([-p.logP for p in self.positions])
         self.estimate_gradient(logProbs, 'logprior')
-        logProbs = np.array([-p.logL for p in self.positions])
+        logProbs = np.array([p.logL for p in self.positions])
         self.estimate_gradient(logProbs, 'loglikelihood')
+        
         if self.verbose > 2: sys.stderr.write("done\n")
-
         self.initialised=True
 
     def estimate_nmcmc(self, safety=1, tau=None):
@@ -242,7 +242,7 @@ class HMCSampler(object):
             self.Nmcmc_exact = (1.0 - 1.0/tau)*self.Nmcmc_exact + (safety/tau)*(2.0/self.acceptance - 1.0)
         
         self.Nmcmc_exact = float(min(self.Nmcmc_exact,self.maxmcmc))
-        self.Nmcmc = max(safety,int(self.Nmcmc_exact))
+        self.Nmcmc       = max(safety,int(self.Nmcmc_exact))
         return self.Nmcmc
 
     def produce_sample(self, queue, logLmin, seed, ip, port, authkey):
@@ -285,7 +285,7 @@ class HMCSampler(object):
                 # update the gradients
                 logProbs = np.array([-p.logP for p in self.positions])
                 self.estimate_gradient(logProbs, 'logprior')
-                logProbs = np.array([-p.logL for p in self.positions])
+                logProbs = np.array([p.logL for p in self.positions])
                 self.estimate_gradient(logProbs, 'loglikelihood')
                 self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
 
@@ -335,7 +335,7 @@ class HMCSampler(object):
     def hamiltonian(self, position, momentum):
         """Computes the Hamiltonian of the current position, velocity pair
         H = U(x) + K(v)
-        U is the potential energy and is = -log_posterior(x)
+        U is the potential energy and is = -log_prior(x)
         Parameters
         ----------
         position : tf.Variable
@@ -344,12 +344,11 @@ class HMCSampler(object):
             Auxiliary velocity variable
         energy_function
             Function from state to position to 'energy'
-             = -log_posterior
+             = -log_prior
         Returns
         -------
         hamitonian : float
         """
-
         return self.potential_energy(position) + self.kinetic_energy(momentum) #+position.logL
 
     def constrained_leapfrog_step(self, position, momentum, logLmin):
@@ -408,52 +407,51 @@ class HMCSampler(object):
         oldparam    = initial_position.copy()
 
         # generate the initial momentum from its canonical distribution
-        v = np.atleast_1d(self.momenta_distribution.rvs())
+        v                = np.atleast_1d(self.momenta_distribution.rvs())
         initial_momentum = self.user.new_point()
         
         for j,k in enumerate(self.positions[0].names):
             initial_momentum[k] = v[j]
 
-        oldmomentum = initial_momentum.copy()
+        oldmomentum     = initial_momentum.copy()
         starting_energy = self.hamiltonian(oldparam, oldmomentum)
         
         while self.jumps < self.Nmcmc:
             
             newparam, newmomentum = self.constrained_leapfrog_step(oldparam.copy(), oldmomentum.copy(), logLmin)
-            newparam.logP = self.user.log_prior(newparam)
-            current_energy = self.hamiltonian(newparam, newmomentum)
+            newparam.logP         = self.user.log_prior(newparam)
+            current_energy        = self.hamiltonian(newparam, newmomentum)
 
             logp_accept = min(0.0, starting_energy - current_energy)
     
             if logp_accept > np.log(random()):
-                # update the likelihood
-                newparam.logL = self.user.log_likelihood(newparam)
-                oldparam = newparam
-                oldmomentum = newmomentum
+
+                oldparam        = newparam
+                oldmomentum     = newmomentum
                 starting_energy = current_energy
-                accepted += 1
+                accepted       += 1
             
             self.jumps+=1
             if self.jumps > self.maxmcmc: break
 
         self.acceptance = float(accepted)/float(self.jumps)
         self.estimate_nmcmc()
-
+        self.autotune()
         return oldparam
 
-    def metropolis_hastings(self,inParam,logLmin):
+    def metropolis_hastings(self, inParam, logLmin):
         """
         metropolis-hastings loop to generate the new live point taking nmcmc steps
         """
-        self.jumps = 0
-        accepted = 0
-        oldparam = inParam.copy()
-        logp_old = self.user.log_prior(oldparam)
+        self.jumps  = 0
+        accepted    = 0
+        oldparam    = inParam.copy()
+        logp_old    = self.user.log_prior(oldparam)
         
         while self.jumps < self.Nmcmc:
             
-            newparam = self.proposals.get_sample(oldparam.copy())
-            newparam.logP = self.user.log_prior(newparam)
+            newparam        = self.proposals.get_sample(oldparam.copy())
+            newparam.logP   = self.user.log_prior(newparam)
             
             if newparam.logP-logp_old + self.proposals.log_J > log(random()):
                 newparam.logL = self.user.log_likelihood(newparam)
@@ -469,9 +467,10 @@ class HMCSampler(object):
 
         self.acceptance = float(accepted)/float(self.jumps)
         self.estimate_nmcmc()
+        
         return oldparam
             
-    def autotune(self, target = 0.234):
-        if self.acceptance < target: self.step_size -= 0.01/self.steps
-        if self.acceptance > target: self.step_size += 0.01/self.steps
+    def autotune(self, target = 0.654):
+        if self.acceptance < target: self.step_size -= 0.005
+        if self.acceptance > target: self.step_size += 0.005    
         if self.step_size < 0.0: self.step_size = 0.00001
