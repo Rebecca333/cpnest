@@ -220,7 +220,7 @@ class HMCSampler(object):
         if self.verbose > 2: sys.stderr.write("Computing initial gradients ...")
         logProbs = np.array([-p.logP for p in self.positions])
         self.estimate_gradient(logProbs, 'logprior')
-        logProbs = np.array([p.logL for p in self.positions])
+        logProbs = np.array([-p.logL for p in self.positions])
         self.estimate_gradient(logProbs, 'loglikelihood')
         
         if self.verbose > 2: sys.stderr.write("done\n")
@@ -285,7 +285,7 @@ class HMCSampler(object):
                 # update the gradients
                 logProbs = np.array([-p.logP for p in self.positions])
                 self.estimate_gradient(logProbs, 'logprior')
-                logProbs = np.array([p.logL for p in self.positions])
+                logProbs = np.array([-p.logL for p in self.positions])
                 self.estimate_gradient(logProbs, 'loglikelihood')
                 self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
 
@@ -330,7 +330,8 @@ class HMCSampler(object):
         """
         potential energy of the current position
         """
-        return -self.user.log_prior(position)
+        position.logP = self.user.log_prior(position)
+        return -position.logP
 
     def hamiltonian(self, position, momentum):
         """Computes the Hamiltonian of the current position, velocity pair
