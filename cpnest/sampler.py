@@ -173,7 +173,7 @@ class HMCSampler(object):
     number of objects for the gradients estimation
     default: 1000
     """
-    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000):
+    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000, l=0.03):
         self.user           = usermodel
         self.maxmcmc        = maxmcmc
         self.Nmcmc          = maxmcmc
@@ -185,9 +185,13 @@ class HMCSampler(object):
         self.acceptance     = 0.0
         self.initialised    = False
         self.gradients      = {}
-        self.step_size      = 0.03
-        self.steps          = 10
+        # step size choice from http://www.homepages.ucl.ac.uk/~ucakabe/papers/Bernoulli_11b.pdf
+        # which asks for the relation step_size = l * dims**(1/4)
+        self.l              = l
+        self.step_size      = None
+        self.steps          = 20
         self.momenta_distribution = None
+    
     
     def reset(self):
         """
@@ -204,7 +208,7 @@ class HMCSampler(object):
         if self.verbose > 2: sys.stderr.write("\n")
 
         self.proposals.set_ensemble(self.positions)
-        
+
         # seed the chains with a standard MCMC
         for j in range(len(self.positions)):
             if self.verbose > 2: sys.stderr.write("process {0!s} --> initial MCMC evolution for {1:d} points --> {2:.0f} % complete\r".format(os.getpid(), self.poolsize, 100.0*float(j+1)/float(self.poolsize)))
@@ -215,7 +219,8 @@ class HMCSampler(object):
 
         self.proposals.set_ensemble(self.positions)
         self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
-
+        self.step_size = self.l * float(len(self.positions[0].names))**(0.25)
+        
         # estimate the initial gradients
         if self.verbose > 2: sys.stderr.write("Computing initial gradients ...")
         logProbs = np.array([-p.logP for p in self.positions])
@@ -426,7 +431,8 @@ class HMCSampler(object):
             logp_accept = min(0.0, starting_energy - current_energy)
     
             if logp_accept > np.log(random()):
-
+                # update the likelihood
+                newparam.logL = self.user.log_likelihood(newparam)
                 oldparam        = newparam
                 oldmomentum     = newmomentum
                 starting_energy = current_energy
@@ -437,7 +443,7 @@ class HMCSampler(object):
 
         self.acceptance = float(accepted)/float(self.jumps)
         self.estimate_nmcmc()
-        self.autotune()
+
         return oldparam
 
     def metropolis_hastings(self, inParam, logLmin):
