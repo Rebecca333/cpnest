@@ -6,7 +6,7 @@ from math import log
 from collections import deque
 from random import random,randrange
 from operator import attrgetter
-from scipy.interpolate import InterpolatedUnivariateSpline, UnivariateSpline
+from scipy.interpolate import InterpolatedUnivariateSpline, UnivariateSpline, LSQUnivariateSpline
 from scipy.stats import multivariate_normal
 
 from . import parameter
@@ -173,7 +173,7 @@ class HMCSampler(object):
     number of objects for the gradients estimation
     default: 1000
     """
-    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000, l=0.03):
+    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000, l=0.3):
         self.user           = usermodel
         self.maxmcmc        = maxmcmc
         self.Nmcmc          = maxmcmc
@@ -188,9 +188,10 @@ class HMCSampler(object):
         # step size choice from http://www.homepages.ucl.ac.uk/~ucakabe/papers/Bernoulli_11b.pdf
         # which asks for the relation step_size = l * dims**(1/4)
         self.l              = l
-        self.step_size      = None
+        self.step_size      = 1.0
         self.steps          = 20
         self.momenta_distribution = None
+        self.counter = 0
     
     
     def reset(self):
@@ -220,14 +221,14 @@ class HMCSampler(object):
         self.proposals.set_ensemble(self.positions)
         self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
         self.step_size = self.l * float(len(self.positions[0].names))**(0.25)
-        
+
         # estimate the initial gradients
         if self.verbose > 2: sys.stderr.write("Computing initial gradients ...")
         logProbs = np.array([-p.logP for p in self.positions])
         self.estimate_gradient(logProbs, 'logprior')
         logProbs = np.array([-p.logL for p in self.positions])
         self.estimate_gradient(logProbs, 'loglikelihood')
-        
+
         if self.verbose > 2: sys.stderr.write("done\n")
         self.initialised=True
 
@@ -260,24 +261,24 @@ class HMCSampler(object):
         queue.cancel_join_thread()
         self.seed = seed
         np.random.seed(seed=self.seed)
-        self.counter=0
-        
+        unused = 0
         while(1):
-            
-            # Pick a random point from the ensemble to start with
-
-            position = self.positions[np.random.randint(self.poolsize)]
-            self.positions.remove(position)
-            
             if logLmin.value==np.inf:
                 break
-            
+            # Pick a random point from the ensemble to start with
+#            logLs = np.array([p.logL for p in self.positions])
+#            position = self.positions[np.random.randint(self.poolsize)]
+#            self.positions.remove(position)
+            position = self.positions.popleft()
+
             # evolve it according to hamilton equations
             newposition = self.hamiltonian_sampling(position,logLmin.value)
-           
+#            print "returned likelihood:",position.logL,"-->",newposition.logL,"loglmin:",logLmin.value
             # Put sample back in the stack
             self.positions.append(newposition.copy())
-            
+#            logLsn = np.array([p.logL for p in self.positions])
+#            print np.mean(logLs), np.mean(logLsn)
+
             # If we bailed out then flag point as unusable
             if self.acceptance==0.0:
                 newposition.logL=-np.inf
@@ -295,7 +296,6 @@ class HMCSampler(object):
                 self.momenta_distribution = multivariate_normal(cov=self.proposals.mass_matrix)
 
             self.counter += 1
-
         sys.stderr.write("Sampler process {0!s}, exiting\n".format(os.getpid()))
         return 0
     
@@ -303,14 +303,46 @@ class HMCSampler(object):
         
         self.gradients[type] = []
 
-        # loop over the parameters, spline interpolate and estimate the gradient
+        # loop over the parameters, estimate the gradient numerically and spline interpolate
+
 #        import matplotlib.pyplot as plt
+
         for j,key in enumerate(self.positions[0].names):
+
             x = np.array([self.positions[i][key] for i in range(len(self.positions))])
             idx = np.argsort(x)
-            x = x[idx]
-            logProbs = logProbs[idx]
-            self.gradients[type].append(InterpolatedUnivariateSpline(x,logProbs,ext=0,check_finite=True).derivative())
+#            lp = logProbs[idx]
+#            x = x[idx]
+            # let's use numpy gradient to compute the finite difference partial derivative of logProbs
+            grad = np.gradient(logProbs,x)
+            # check for nans
+            w = np.isnan(grad)
+            # zero the nans
+            grad[w] = 0.
+            # approximate with a rolling median and standard deviation
+            N = np.minimum(32,self.poolsize)
+            bins = np.linspace(x.min(), x.max(),N)
+            xmin, xmax = np.nanpercentile(x,[5,95])
+            idx  = np.digitize(x,bins)
+            running_median = np.array([np.nanmedian(grad[idx==k]) for k in range(N)])
+            running_std    = np.array([np.nanstd(grad[idx==k]) for k in range(N)])
+            weight = ~np.logical_or(np.isnan(running_median),np.isnan(running_std))
+            running_median[~weight] = 0.0
+            if not(np.any(np.isnan(running_std))):
+                weight = weight.astype(float)/running_std
+            
+            # use now a linear spline interpolant to represent the partial derivative
+            self.gradients[type].append(UnivariateSpline(bins, running_median, ext=0, k=3, w=weight, s=N))
+#            plt.figure()
+#            plt.plot(x,logProbs,'ro',alpha=0.5)
+#            plt.plot(x,grad,'g.',alpha=0.5)
+#            plt.errorbar(bins,running_median,yerr=running_std,lw=2)
+#            plt.plot(bins,self.gradients[type][j](bins),'k',lw=3)
+#            plt.xlabel(key)
+#            plt.ylim([-20,100])
+#            plt.savefig('grad_%s_%s_%04d.png'%(type,key,self.counter))
+#        plt.close('all')
+#        exit()
 
     def gradient(self, inParam, gradients_list):
         return np.array([g(inParam[n]) for g,n in zip(gradients_list,self.positions[0].names)])
@@ -373,7 +405,21 @@ class HMCSampler(object):
             # do a step
             for j,k in enumerate(self.positions[0].names):
                 position[k] += self.step_size * momentum[k]
+
+            position.logP = self.user.log_prior(position)
             
+            # if the trajectory brings us outside the prior boundary, bounce back and forth
+            # see https://arxiv.org/pdf/1206.1901.pdf pag. 37
+            
+            if not(np.isfinite(position.logP)):
+                for j,k in enumerate(self.positions[0].names):
+                    while position[k] > self.user.bounds[j][1]:
+                        position[k] = self.user.bounds[j][1] - (position[k] - self.user.bounds[j][1])
+                        momentum[k] = -momentum[k]
+                    while position[k] < self.user.bounds[j][0]:
+                        position[k] = self.user.bounds[j][0] + (self.user.bounds[j][0] - position[k])
+                        momentum[k] = -momentum[k]
+
             # Update gradient
             g = self.gradient(position, self.gradients['logprior'])
 
@@ -389,13 +435,14 @@ class HMCSampler(object):
                 # compute the normal to the constraint
                 gL = self.gradient(position, self.gradients['loglikelihood'])
                 n = gL/np.abs(np.sum(gL))
+                
                 # bounce on the constraint
                 for j,k in enumerate(self.positions[0].names):
                     momentum[k] += - 2 * (momentum[k]*n[j]) * n[j]
 
-        # Update the position
-        for j,k in enumerate(self.positions[0].names):
-            position[k] += self.step_size * momentum[k]
+#        # Update the position
+#        for j,k in enumerate(self.positions[0].names):
+#            position[k] += self.step_size * momentum[k]
 
         # Do a final update of the momentum for a half step
         g = self.gradient(position, self.gradients['logprior'])
@@ -411,30 +458,26 @@ class HMCSampler(object):
         self.jumps  = 0
         accepted    = 0
         oldparam    = initial_position.copy()
-
-        # generate the initial momentum from its canonical distribution
-        v                = np.atleast_1d(self.momenta_distribution.rvs())
-        initial_momentum = self.user.new_point()
-        
-        for j,k in enumerate(self.positions[0].names):
-            initial_momentum[k] = v[j]
-
-        oldmomentum     = initial_momentum.copy()
-        starting_energy = self.hamiltonian(oldparam, oldmomentum)
         
         while self.jumps < self.Nmcmc:
             
-            newparam, newmomentum = self.constrained_leapfrog_step(oldparam.copy(), oldmomentum.copy(), logLmin)
+            # generate the initial momentum from its canonical distribution
+            v                = np.atleast_1d(self.momenta_distribution.rvs())
+            initial_momentum = self.user.new_point()
+            
+            for j,k in enumerate(self.positions[0].names):
+                initial_momentum[k] = v[j]
+
+            starting_energy = self.hamiltonian(oldparam, initial_momentum)
+            newparam, newmomentum = self.constrained_leapfrog_step(oldparam.copy(), initial_momentum.copy(), logLmin)
             newparam.logP         = self.user.log_prior(newparam)
             current_energy        = self.hamiltonian(newparam, newmomentum)
 
             logp_accept = min(0.0, starting_energy - current_energy)
     
             if logp_accept > np.log(random()):
-                # update the likelihood
-                newparam.logL = self.user.log_likelihood(newparam)
+
                 oldparam        = newparam
-                oldmomentum     = newmomentum
                 starting_energy = current_energy
                 accepted       += 1
             
