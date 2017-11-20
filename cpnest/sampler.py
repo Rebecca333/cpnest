@@ -173,7 +173,7 @@ class HMCSampler(object):
     number of objects for the gradients estimation
     default: 1000
     """
-    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000, l=0.03):
+    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000, l=1.0):
         self.user           = usermodel
         self.maxmcmc        = maxmcmc
         self.Nmcmc          = maxmcmc
@@ -243,11 +243,14 @@ class HMCSampler(object):
 
         if self.acceptance == 0.0:
             self.Nmcmc_exact = (1.0 + 1.0/tau)*self.Nmcmc_exact
+#            print self.Nmcmc_exact,(1.0 - 1.0/tau)
         else:
             self.Nmcmc_exact = (1.0 - 1.0/tau)*self.Nmcmc_exact + (safety/tau)*(2.0/self.acceptance - 1.0)
-        
+#            print self.Nmcmc_exact,(1.0 - 1.0/tau),(safety/tau),(2.0/self.acceptance - 1.0),(safety/tau)*(2.0/self.acceptance - 1.0)
+
         self.Nmcmc_exact = float(min(self.Nmcmc_exact,self.maxmcmc))
         self.Nmcmc       = max(safety,int(self.Nmcmc_exact))
+
         return self.Nmcmc
 
     def produce_sample(self, queue, logLmin, seed, ip, port, authkey):
