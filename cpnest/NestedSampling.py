@@ -201,6 +201,7 @@ class NestedSampler(object):
             loops += 1
             self.acceptance, self.jumps, proposed = queues[self.queue_counter].get()
             self.queue_counter = (self.queue_counter + 1) % len(queues)
+#            print("i:{0:d} loglmin {1:.5f} logl {2:.5f}".format(loops, self.logLmin.value, proposed.logL))
             if proposed.logL>self.logLmin.value:
                 # replace worst point with new one
                 self.params[self.worst]=proposed

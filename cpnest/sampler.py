@@ -304,23 +304,23 @@ class HMCSampler(object):
             x = np.array([self.positions[i][key] for i in range(len(self.positions))])
             idx = np.argsort(x)
             lp = logProbs
-#[idx]
-#            x = x[idx]
             # let's use numpy gradient to compute the finite difference partial derivative of logProbs
             grad = np.gradient(lp,x)
             # check for nans
             w = np.isnan(grad)
             # zero the nans
             grad[w] = 0.
-            # approximate with a rolling median and standard deviation
-            N = np.minimum(32,self.poolsize)
+            # approximate with a rolling median and standard deviation to average out all the small scale variations
+            window_size = 100
+            N = np.maximum(np.ceil(self.poolsize/window_size).astype(int),3)
             bins = np.linspace(x.min(), x.max(),N)
-            xmin, xmax = np.nanpercentile(x,[5,95])
+
             idx  = np.digitize(x,bins)
             running_median = np.array([np.nanmedian(grad[idx==k]) for k in range(N)])
             running_std    = np.array([np.nanstd(grad[idx==k]) for k in range(N)])
             weight = ~np.logical_or(np.isnan(running_median),np.isnan(running_std))
             running_median[~weight] = 0.0
+            
             if not(np.any(np.isnan(running_std))):
                 weight = weight.astype(float)/running_std
             
@@ -398,13 +398,14 @@ class HMCSampler(object):
             # do a step
             for j,k in enumerate(self.positions[0].names):
                 position[k] += self.step_size * momentum[k]
-
-            position.logP = self.user.log_prior(position)
-            
+        
             # if the trajectory brings us outside the prior boundary, bounce back and forth
             # see https://arxiv.org/pdf/1206.1901.pdf pag. 37
             
+            position.logP = self.user.log_prior(position)
+            
             if not(np.isfinite(position.logP)):
+                return position, momentum
                 for j,k in enumerate(self.positions[0].names):
                     while position[k] > self.user.bounds[j][1]:
                         position[k] = self.user.bounds[j][1] - (position[k] - self.user.bounds[j][1])
@@ -461,18 +462,16 @@ class HMCSampler(object):
             for j,k in enumerate(self.positions[0].names):
                 initial_momentum[k] = v[j]
 
-            starting_energy = self.hamiltonian(oldparam, initial_momentum)
+            starting_energy       = self.hamiltonian(oldparam, initial_momentum)
             newparam, newmomentum = self.constrained_leapfrog_step(oldparam.copy(), initial_momentum.copy(), logLmin)
-            newparam.logP         = self.user.log_prior(newparam)
             current_energy        = self.hamiltonian(newparam, newmomentum)
 
             logp_accept = min(0.0, starting_energy - current_energy)
     
             if logp_accept > np.log(random()):
-
-                oldparam        = newparam
-                starting_energy = current_energy
-                accepted       += 1
+                if newparam.logL > logLmin:
+                    oldparam        = newparam
+                    accepted       += 1
             
             self.jumps+=1
             if self.jumps > self.maxmcmc: break
