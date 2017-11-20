@@ -36,7 +36,7 @@ class GaussianMixtureTestCase(unittest.TestCase):
     Test the gaussian model
     """
     def setUp(self):
-        self.work=cpnest.CPNest(GaussianMixtureModel(), verbose=3, Nthreads=8, Nlive=128, maxmcmc=128, Poolsize = 128)
+        self.work=cpnest.CPNest(GaussianMixtureModel(), verbose=3, Nthreads=8, Nlive=100, maxmcmc=100, Poolsize = 100)
 
     def test_run(self):
         self.work.run()

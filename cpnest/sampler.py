@@ -173,7 +173,7 @@ class HMCSampler(object):
     number of objects for the gradients estimation
     default: 1000
     """
-    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000, l=0.3):
+    def __init__(self,usermodel, maxmcmc, verbose=False, poolsize=1000, l=0.03):
         self.user           = usermodel
         self.maxmcmc        = maxmcmc
         self.Nmcmc          = maxmcmc
@@ -192,7 +192,6 @@ class HMCSampler(object):
         self.steps          = 20
         self.momenta_distribution = None
         self.counter = 0
-    
     
     def reset(self):
         """
@@ -265,19 +264,12 @@ class HMCSampler(object):
         while(1):
             if logLmin.value==np.inf:
                 break
-            # Pick a random point from the ensemble to start with
-#            logLs = np.array([p.logL for p in self.positions])
-#            position = self.positions[np.random.randint(self.poolsize)]
-#            self.positions.remove(position)
+            # Pick a point from the ensemble to start with
             position = self.positions.popleft()
-
             # evolve it according to hamilton equations
             newposition = self.hamiltonian_sampling(position,logLmin.value)
-#            print "returned likelihood:",position.logL,"-->",newposition.logL,"loglmin:",logLmin.value
             # Put sample back in the stack
             self.positions.append(newposition.copy())
-#            logLsn = np.array([p.logL for p in self.positions])
-#            print np.mean(logLs), np.mean(logLsn)
 
             # If we bailed out then flag point as unusable
             if self.acceptance==0.0:
@@ -311,10 +303,11 @@ class HMCSampler(object):
 
             x = np.array([self.positions[i][key] for i in range(len(self.positions))])
             idx = np.argsort(x)
-#            lp = logProbs[idx]
+            lp = logProbs
+#[idx]
 #            x = x[idx]
             # let's use numpy gradient to compute the finite difference partial derivative of logProbs
-            grad = np.gradient(logProbs,x)
+            grad = np.gradient(lp,x)
             # check for nans
             w = np.isnan(grad)
             # zero the nans
@@ -332,9 +325,9 @@ class HMCSampler(object):
                 weight = weight.astype(float)/running_std
             
             # use now a linear spline interpolant to represent the partial derivative
-            self.gradients[type].append(UnivariateSpline(bins, running_median, ext=0, k=3, w=weight, s=N))
+            self.gradients[type].append(UnivariateSpline(bins, running_median, ext=0, k=3, w=weight, s=self.poolsize))
 #            plt.figure()
-#            plt.plot(x,logProbs,'ro',alpha=0.5)
+#            plt.plot(x,lp,'ro',alpha=0.5)
 #            plt.plot(x,grad,'g.',alpha=0.5)
 #            plt.errorbar(bins,running_median,yerr=running_std,lw=2)
 #            plt.plot(bins,self.gradients[type][j](bins),'k',lw=3)
@@ -486,7 +479,7 @@ class HMCSampler(object):
 
         self.acceptance = float(accepted)/float(self.jumps)
         self.estimate_nmcmc()
-
+#        self.autotune()
         return oldparam
 
     def metropolis_hastings(self, inParam, logLmin):
@@ -521,6 +514,6 @@ class HMCSampler(object):
         return oldparam
             
     def autotune(self, target = 0.654):
-        if self.acceptance < target: self.step_size -= 0.005
-        if self.acceptance > target: self.step_size += 0.005    
-        if self.step_size < 0.0: self.step_size = 0.00001
+        if self.acceptance < target: self.steps -= 1
+        if self.acceptance > target: self.steps += 1
+        if self.steps < 1: self.steps = 1
