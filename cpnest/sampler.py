@@ -400,7 +400,7 @@ class HMCSampler(object):
             
             # do a step
             for j,k in enumerate(self.positions[0].names):
-                position[k] += self.step_size * momentum[k]
+                position[k] += self.step_size * momentum[k] * self.proposals.inverse_mass_matrix[j,j]
         
             # if the trajectory brings us outside the prior boundary, bounce back and forth
             # see https://arxiv.org/pdf/1206.1901.pdf pag. 37
